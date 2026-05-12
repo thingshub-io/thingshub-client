@@ -1,0 +1,2 @@
+# thingshub-client
+Thingshub SDK
