@@ -1,4 +1,4 @@
-package io.thingshub.client.model;
+package io.thingshub.client;
 
 import java.util.Map;
 
