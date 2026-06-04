@@ -8,6 +8,11 @@ Thingshub Client SDK可以让业务系统开发者轻松连接Thingshub Server�
 
 ## 安装
 
+从Github仓库check out代码后，使用以下命令构建：
+```
+mvn clean install -DskipTests
+```
+
 在项目中添加依赖：
 
 ```
@@ -64,11 +69,11 @@ public class StatusMessageProcesser implements MessageProcessor<StatusMessage> {
 	@Resource
 	private ThingshubClient thingshubClient;
 
-	public static final String REPLY_MESSAGE_NAME = "status_ack";//消息名status_ack需要在Thingshub平台中定义
+	public static final String REPLY_MESSAGE_NAME = "status_ack";
 
 	@Override
 	public String getMessageName() {
-		return "status";//消息名status需要在Thingshub平台中定义
+		return "status";
 	}
 
 	@Override
@@ -77,7 +82,9 @@ public class StatusMessageProcesser implements MessageProcessor<StatusMessage> {
 
 		log.info("Processing Status Data====================");
 
-		thingshubClient.reply("HY-001", sn, REPLY_MESSAGE_NAME, messageId, null);//如果需要的话，业务系统对设备上报消息进行回复
+		thingshubClient.reply("HY-001", sn, REPLY_MESSAGE_NAME, messageId, null);
+
+//		thingshubClient.replyWithError("HY-001", sn, REPLY_MESSAGE_NAME, messageId, 500, "error message");
 
 	}
 
