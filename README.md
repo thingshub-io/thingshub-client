@@ -25,13 +25,13 @@ Thingshub Client SDK可以让业务系统开发者轻松连接Thingshub Server�
 ```java
 Map<String, Object> updateParams = new HashMap<>();
 updateParams.put("url", "http://www.test.com/qlock-app-v4.0.bin");
-thingshubClient.publish("HY-001", "320027880006", "update", updateParams);//消息名update和消息参数updateParams需要在Thingshub平台中定义
+thingshubClient.publish("HY-001", "320027880006", "update", updateParams);//消息名update和消息参数url需要在Thingshub平台中定义
 ```
 
 ### 监听设备消息
 想要监听设备上报的消息，需要实现MessageProcessor接口。
 
-监听设备在收到业务系统下发升级命令之后的回复消息：
+监听设备回复的消息：
 ```java
 @Component
 @Slf4j
@@ -55,7 +55,7 @@ public class UpdateAckMessageProcessor implements MessageProcessor<Void> {
 }
 ```
 
-监听设备主动上报状态的消息：
+监听设备主动上报的消息：
 ```java
 @Component
 @Slf4j
