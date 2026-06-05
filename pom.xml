@@ -17,10 +17,10 @@
 
 		<springboot.version>2.6.13</springboot.version>
 		<lombok.version>1.18.20</lombok.version>
-		<springboot.version>2.6.13</springboot.version>
-		<fastjson2.version>2.0.42</fastjson2.version>
 		<eclipse.paho.version>1.2.5</eclipse.paho.version>
-		<thingshub.commons.version>1.0.0</thingshub.commons.version>
+		<guava.version>31.1-jre</guava.version>
+		<fastjson2.version>2.0.42</fastjson2.version>
+		<commons-lang3.version>3.12.0</commons-lang3.version>		
 	</properties>
 
 	<dependencies>
@@ -41,14 +41,19 @@
 		    <version>${eclipse.paho.version}</version>
 		</dependency>
 		<dependency>
+			<groupId>com.google.guava</groupId>
+			<artifactId>guava</artifactId>
+			<version>${guava.version}</version>
+		</dependency>
+		<dependency>
 			<groupId>com.alibaba.fastjson2</groupId>
 			<artifactId>fastjson2</artifactId>
 			<version>${fastjson2.version}</version>
 		</dependency>
 		<dependency>
-			<groupId>io.thingshub</groupId>
-			<artifactId>thingshub-commons</artifactId>
-			<version>${thingshub.commons.version}</version>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-lang3</artifactId>
+			<version>${commons-lang3.version}</version>
 		</dependency>
 	</dependencies>
 

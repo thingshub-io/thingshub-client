@@ -3,7 +3,7 @@ package io.thingshub.client;
 import java.io.Serializable;
 import java.util.List;
 
-import io.thingshub.commons.model.MessageParameter;
+import io.thingshub.MessageParameter;
 import lombok.Data;
 
 /**
