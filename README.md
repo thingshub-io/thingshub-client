@@ -91,6 +91,7 @@ public class StatusMessageProcesser implements MessageProcessor<StatusMessage> {
 
 		log.info("Processing Status Data====================");
 
+		//如果通信协议中规定需要回复消息
 		thingshubClient.reply("HY-001", sn, REPLY_MESSAGE_NAME, messageId, null);
 
 //		thingshubClient.replyWithError("HY-001", sn, REPLY_MESSAGE_NAME, messageId, 500, "error message");
