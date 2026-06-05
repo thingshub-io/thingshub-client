@@ -25,6 +25,15 @@ mvn clean install -DskipTests
 
 ## 使用示例
 
+### 配置Thingshub Server连接信息
+```java
+thingshub: 
+  host: 10.40.174.195
+  port: 1883
+  username: biz_client
+  password: 12345678
+```
+
 ### 发送消息
 以下代码表示给产品编号为HY-001、设备序列号为320027880006的设备发送系统升级的命令：
 ```java
