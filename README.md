@@ -30,7 +30,7 @@ mvn clean install -DskipTests
 ```java
 Map<String, Object> updateParams = new HashMap<>();
 updateParams.put("url", "http://www.test.com/qlock-app-v4.0.bin");
-thingshubClient.publish("HY-001", "320027880006", "update", updateParams);//消息名update和消息参数url需要在Thingshub平台中定义并授权给当前客户端
+thingshubClient.publish("HY-001", "320027880006", "update", updateParams);//消息名update和消息参数url需要在Thingshub平台中定义，并授权给当前客户端
 ```
 
 ### 监听设备消息
@@ -44,7 +44,7 @@ public class UpdateAckMessageProcessor implements MessageProcessor<Void> {
 
 	@Override
 	public String getMessageName() {
-		return "update_ack"; //消息名update_ack需要在Thingshub平台中定义并授权给当前客户端
+		return "update_ack"; //消息名update_ack需要在Thingshub平台中定义，并授权给当前客户端
 	}
 
 	@Override
