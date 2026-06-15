@@ -7,6 +7,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -121,7 +122,7 @@ public class ThingshubClient {
 	private final Map<String, ScheduledFuture<?>> reply_timeout_tasks = Maps.newConcurrentMap();
 
 	private final ScheduledExecutorService timeoutScheduler = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors() + 1);
-	private final ExecutorService replyExecutor = Executors.newCachedThreadPool(r -> new Thread(r, "thingshub-reply-handler-" + UUID.randomUUID().toString().substring(0, 8)));
+	private final ExecutorService messageExecutor = Executors.newCachedThreadPool(r -> new Thread(r, "thingshub-message-handler-" + UUID.randomUUID().toString().substring(0, 8)));
 
 	private final Map<String, MessageProcessor<?>> message_processors = new HashMap<>();
 	private final Map<String, Type> message_types = new HashMap<>();
@@ -129,6 +130,8 @@ public class ThingshubClient {
 	private int defaultTimeout = 30;// seconds
 
 	private CountDownLatch initLatch = new CountDownLatch(1000);
+
+	private final Set<CompletableFuture<?>> processingTasks = new HashSet<>();
 
 	private String topicShareGroup;
 
@@ -221,40 +224,42 @@ public class ThingshubClient {
 						log.debug("thingshub message arrived, topic: {}, payload: {}", topic, new String(mqttMessage.getPayload()));
 					}
 
-					JSONObject thingshubMessage = JSON.parseObject(new String(mqttMessage.getPayload()));
-					String theId = thingshubMessage.getString("id");
-					String theName = thingshubMessage.getString("name");
-					String theClientId = thingshubMessage.getString("clientId");
-					if (theName.equals(SERVICE_CLIENT_INTERNAL_MESSAGE_CHANGE_PRODUCT_BINDING)) {
-						JSONObject params = (JSONObject) thingshubMessage.getJSONObject("params");
-						String action = params.getString("action");
-						List<String> productCodes = params.getList("productCodes", String.class);
-
-						refreshProducts(action, productCodes);
-					} else if (theName.equals(SERVICE_CLIENT_INTERNAL_MESSAGE_CHANGE_MESSAGE_AUTHORIZATION)) {
-						JSONObject params = (JSONObject) thingshubMessage.getJSONObject("params");
-						String productCode = params.getString("productCode");
-						if (product_codes.contains(productCode)) {
+					addProcessingTask(CompletableFuture.runAsync(() -> {
+						JSONObject thingshubMessage = JSON.parseObject(new String(mqttMessage.getPayload()));
+						String theId = thingshubMessage.getString("id");
+						String theName = thingshubMessage.getString("name");
+						String theClientId = thingshubMessage.getString("clientId");
+						if (theName.equals(SERVICE_CLIENT_INTERNAL_MESSAGE_CHANGE_PRODUCT_BINDING)) {
+							JSONObject params = (JSONObject) thingshubMessage.getJSONObject("params");
 							String action = params.getString("action");
-							String messageName = params.getString("messageName");
-							MessageSpec messageSpec = params.getObject("messageSpec", MessageSpec.class);
-							refreshMessageSpec(action, messageName, messageSpec);
+							List<String> productCodes = params.getList("productCodes", String.class);
+
+							refreshProducts(action, productCodes);
+						} else if (theName.equals(SERVICE_CLIENT_INTERNAL_MESSAGE_CHANGE_MESSAGE_AUTHORIZATION)) {
+							JSONObject params = (JSONObject) thingshubMessage.getJSONObject("params");
+							String productCode = params.getString("productCode");
+							if (product_codes.contains(productCode)) {
+								String action = params.getString("action");
+								String messageName = params.getString("messageName");
+								MessageSpec messageSpec = params.getObject("messageSpec", MessageSpec.class);
+								refreshMessageSpec(action, messageName, messageSpec);
+							}
+						} else if (thingshubMessage.getInteger("code") != null) {// device reply message
+							ScheduledFuture<?> replyTimeoutTask = reply_timeout_tasks.remove(theId);
+							if (replyTimeoutTask != null) {
+								replyTimeoutTask.cancel(false);
+							}
+							ReplyHandler<?> replyHandler = pending_reply_handlers.remove(theId);
+							if (replyHandler != null) {
+								handleReply(thingshubMessage, replyHandler);
+							} else {
+								processReplyMessage(theClientId, theName, theId, thingshubMessage.getInteger("code"), thingshubMessage.getString("message"),
+										thingshubMessage.get("data"));
+							}
+						} else {// device publish message
+							processPublishMessage(theClientId, theName, theId, thingshubMessage.get("params"));
 						}
-					} else if (thingshubMessage.getInteger("code") != null) {// device reply message
-						ScheduledFuture<?> replyTimeoutTask = reply_timeout_tasks.remove(theId);
-						if (replyTimeoutTask != null) {
-							replyTimeoutTask.cancel(false);
-						}
-						ReplyHandler<?> replyHandler = pending_reply_handlers.remove(theId);
-						if (replyHandler != null) {
-							handleReply(thingshubMessage, replyHandler);
-						} else {
-							processReplyMessage(theClientId, theName, theId, thingshubMessage.getInteger("code"), thingshubMessage.getString("message"),
-									thingshubMessage.get("data"));
-						}
-					} else {// device publish message
-						processPublishMessage(theClientId, theName, theId, thingshubMessage.get("params"));
-					}
+					}, messageExecutor));
 				}
 
 				@Override
@@ -308,6 +313,20 @@ public class ThingshubClient {
 				}
 			}
 		}
+	}
+
+	public final <T> CompletableFuture<T> addProcessingTask(CompletableFuture<T> taskFuture) {
+		if (!taskFuture.isDone()) {
+			processingTasks.add(taskFuture);
+			taskFuture.whenComplete((v, e) -> {
+				if (e != null) {
+					log.error("", e);
+				}
+				processingTasks.remove(taskFuture);
+			});
+		}
+
+		return taskFuture;
 	}
 
 	private void processPublishMessage(String sn, String messageName, String messageId, Object params) {
@@ -385,7 +404,7 @@ public class ThingshubClient {
 	}
 
 	private <T> void handleReply(JSONObject thingshubMessage, ReplyHandler<T> replyHandler) {
-		replyExecutor.submit(() -> {
+		messageExecutor.submit(() -> {
 			try {
 				if (thingshubMessage.getIntValue("code") == MessageResult.SUCCESS.code()) {
 					if (thingshubMessage.get("data") != null) {
@@ -482,7 +501,7 @@ public class ThingshubClient {
 			ReplyHandler<?> replyHandler = pending_reply_handlers.remove(messageId);
 			if (replyHandler != null) {
 				reply_timeout_tasks.remove(messageId).cancel(false);
-				replyExecutor.submit(() -> replyHandler.onError(e));
+				messageExecutor.submit(() -> replyHandler.onError(e));
 			} else {
 				log.error("", e);
 			}
@@ -493,7 +512,7 @@ public class ThingshubClient {
 		return timeoutScheduler.schedule(() -> {
 			ReplyHandler<?> replyHandler = pending_reply_handlers.remove(messageId);
 			if (replyHandler != null) {
-				replyExecutor.submit(() -> replyHandler.onTimeout());
+				messageExecutor.submit(() -> replyHandler.onTimeout());
 			}
 			ScheduledFuture<?> timeoutFuture = reply_timeout_tasks.remove(messageId);
 			if (timeoutFuture != null) {
@@ -563,7 +582,7 @@ public class ThingshubClient {
 			ReplyHandler<?> replyHandler = pending_reply_handlers.remove(messageId);
 			if (replyHandler != null) {
 				reply_timeout_tasks.remove(messageId).cancel(false);
-				replyExecutor.submit(() -> replyHandler.onError(e));
+				messageExecutor.submit(() -> replyHandler.onError(e));
 			} else {
 				log.error("", e);
 			}
@@ -871,38 +890,43 @@ public class ThingshubClient {
 			}
 		}
 
-		DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-		String curTime = LocalDateTime.now().format(formatter);
+		addProcessingTask(CompletableFuture.runAsync(() -> {
+			DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+			String curTime = LocalDateTime.now().format(formatter);
 
-		JSONObject thingshubMessage = new JSONObject();
-		thingshubMessage.put("id", msgId);
-		thingshubMessage.put("clientId", clientId);
-		thingshubMessage.put("version", MESSAGE_MODEL_VERSION);
-		thingshubMessage.put("name", msgName);
-		thingshubMessage.put("time", curTime);
-		thingshubMessage.put("code", 200);
-		thingshubMessage.put("message", "success");
-		thingshubMessage.put("data", data);
+			JSONObject thingshubMessage = new JSONObject();
+			thingshubMessage.put("id", msgId);
+			thingshubMessage.put("clientId", clientId);
+			thingshubMessage.put("version", MESSAGE_MODEL_VERSION);
+			thingshubMessage.put("name", msgName);
+			thingshubMessage.put("time", curTime);
+			thingshubMessage.put("code", 200);
+			thingshubMessage.put("message", "success");
+			thingshubMessage.put("data", data);
 
-		MqttMessage mqttMessage = new MqttMessage();
-		mqttMessage.setQos(2);
-		mqttMessage.setRetained(false);
-		mqttMessage.setPayload(JSON.toJSONString(thingshubMessage).getBytes(StandardCharsets.UTF_8));
+			MqttMessage mqttMessage = new MqttMessage();
+			mqttMessage.setQos(2);
+			mqttMessage.setRetained(false);
+			mqttMessage.setPayload(JSON.toJSONString(thingshubMessage).getBytes(StandardCharsets.UTF_8));
 
-		try {
-			String msgTopic = switch (MessageType.of(messageSpec.getType())) {
-			case PROPERTY_REPLY -> String.format(THING_TOPIC_PROPERTY_REPLY, productCode, sn, msgName);
-			case SERVICE_REQUEST_REPLY -> String.format(THING_TOPIC_SERVICE_REQUEST_REPLY, productCode, sn, msgName);
-			case EVENT_REPLY -> String.format(THING_TOPIC_EVENT_REPLY, productCode, sn, msgName);
-			default -> throw new ThingshubException("invalid message type " + messageSpec.getType());
-			};
+			try {
+				String msgTopic = switch (MessageType.of(messageSpec.getType())) {
+				case PROPERTY_REPLY -> String.format(THING_TOPIC_PROPERTY_REPLY, productCode, sn, msgName);
+				case SERVICE_REQUEST_REPLY -> String.format(THING_TOPIC_SERVICE_REQUEST_REPLY, productCode, sn, msgName);
+				case EVENT_REPLY -> String.format(THING_TOPIC_EVENT_REPLY, productCode, sn, msgName);
+				default -> throw new ThingshubException("invalid message type " + messageSpec.getType());
+				};
 
-			IMqttToken token = mqttAsyncClient.publish(msgTopic, mqttMessage);
-			token.waitForCompletion();
-		} catch (MqttException e) {
-			log.error("reply failed, message name: {}, message id: {}, error: ", msgId, msgName, e);
-			throw new ThingshubException(e.getMessage());
-		}
+				IMqttToken token = mqttAsyncClient.publish(msgTopic, mqttMessage);
+				token.waitForCompletion();
+			} catch (MqttException e) {
+				log.error("reply failed, message name: {}, message id: {}, error: ", msgName, msgId, e);
+				throw new ThingshubException(e.getMessage());
+			}
+		}, messageExecutor).exceptionally(e -> {
+			log.error("", e);
+			return null;
+		}));
 	}
 
 	/**
@@ -934,37 +958,42 @@ public class ThingshubClient {
 			throw new ThingshubException(String.format("产品[%s]消息名称[%s]未定义", productCode, msgName));
 		}
 
-		DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-		String curTime = LocalDateTime.now().format(formatter);
+		addProcessingTask(CompletableFuture.runAsync(() -> {
+			DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+			String curTime = LocalDateTime.now().format(formatter);
 
-		JSONObject thingshubMessage = new JSONObject();
-		thingshubMessage.put("id", msgId);
-		thingshubMessage.put("clientId", clientId);
-		thingshubMessage.put("version", MESSAGE_MODEL_VERSION);
-		thingshubMessage.put("name", msgName);
-		thingshubMessage.put("time", curTime);
-		thingshubMessage.put("code", errCode);
-		thingshubMessage.put("message", errMsg);
+			JSONObject thingshubMessage = new JSONObject();
+			thingshubMessage.put("id", msgId);
+			thingshubMessage.put("clientId", clientId);
+			thingshubMessage.put("version", MESSAGE_MODEL_VERSION);
+			thingshubMessage.put("name", msgName);
+			thingshubMessage.put("time", curTime);
+			thingshubMessage.put("code", errCode);
+			thingshubMessage.put("message", errMsg);
 
-		MqttMessage mqttMessage = new MqttMessage();
-		mqttMessage.setQos(2);
-		mqttMessage.setRetained(false);
-		mqttMessage.setPayload(JSON.toJSONString(thingshubMessage).getBytes(StandardCharsets.UTF_8));
+			MqttMessage mqttMessage = new MqttMessage();
+			mqttMessage.setQos(2);
+			mqttMessage.setRetained(false);
+			mqttMessage.setPayload(JSON.toJSONString(thingshubMessage).getBytes(StandardCharsets.UTF_8));
 
-		try {
-			String msgTopic = switch (MessageType.of(messageSpec.getType())) {
-			case PROPERTY_REPLY -> String.format(THING_TOPIC_PROPERTY_REPLY, productCode, sn, msgName);
-			case SERVICE_REQUEST_REPLY -> String.format(THING_TOPIC_SERVICE_REQUEST_REPLY, productCode, sn, msgName);
-			case EVENT_REPLY -> String.format(THING_TOPIC_EVENT_REPLY, productCode, sn, msgName);
-			default -> throw new ThingshubException("invalid message type " + messageSpec.getType());
-			};
+			try {
+				String msgTopic = switch (MessageType.of(messageSpec.getType())) {
+				case PROPERTY_REPLY -> String.format(THING_TOPIC_PROPERTY_REPLY, productCode, sn, msgName);
+				case SERVICE_REQUEST_REPLY -> String.format(THING_TOPIC_SERVICE_REQUEST_REPLY, productCode, sn, msgName);
+				case EVENT_REPLY -> String.format(THING_TOPIC_EVENT_REPLY, productCode, sn, msgName);
+				default -> throw new ThingshubException("invalid message type " + messageSpec.getType());
+				};
 
-			IMqttToken token = mqttAsyncClient.publish(msgTopic, mqttMessage);
-			token.waitForCompletion();
-		} catch (MqttException e) {
-			log.error("reply failed, message name: {}, message id: {}, error: ", msgId, msgName, e);
-			throw new ThingshubException(e.getMessage());
-		}
+				IMqttToken token = mqttAsyncClient.publish(msgTopic, mqttMessage);
+				token.waitForCompletion();
+			} catch (MqttException e) {
+				log.error("reply failed, message name: {}, message id: {}, error: ", msgName, msgId, e);
+				throw new ThingshubException(e.getMessage());
+			}
+		}, messageExecutor).exceptionally(e -> {
+			log.error("", e);
+			return null;
+		}));
 	}
 
 	private void disconnect() {
@@ -1077,7 +1106,7 @@ public class ThingshubClient {
 			ReplyHandler<?> replyHandler = pending_reply_handlers.remove(messageId);
 			if (replyHandler != null) {
 				reply_timeout_tasks.remove(messageId).cancel(false);
-				replyExecutor.submit(() -> replyHandler.onError(e));
+				messageExecutor.submit(() -> replyHandler.onError(e));
 			} else {
 				log.error("", e);
 			}
@@ -1162,7 +1191,7 @@ public class ThingshubClient {
 			ReplyHandler<?> replyHandler = pending_reply_handlers.remove(messageId);
 			if (replyHandler != null) {
 				reply_timeout_tasks.remove(messageId).cancel(false);
-				replyExecutor.submit(() -> replyHandler.onError(e));
+				messageExecutor.submit(() -> replyHandler.onError(e));
 			} else {
 				log.error("", e);
 			}
