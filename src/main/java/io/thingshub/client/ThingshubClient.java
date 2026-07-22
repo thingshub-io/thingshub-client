@@ -21,13 +21,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 
 import org.eclipse.paho.mqttv5.client.IMqttToken;
+import org.eclipse.paho.mqttv5.client.MqttActionListener;
 import org.eclipse.paho.mqttv5.client.MqttAsyncClient;
 import org.eclipse.paho.mqttv5.client.MqttCallback;
 import org.eclipse.paho.mqttv5.client.MqttConnectionOptions;
@@ -137,6 +137,9 @@ public class ThingshubClient {
 
 	private MqttAsyncClient mqttAsyncClient;
 
+	@Value("${spring.application.node-id: 1}")
+	private Integer applicationNodeId;
+
 	@Value("${thingshub.host}")
 	private String host;
 
@@ -180,8 +183,8 @@ public class ThingshubClient {
 		}
 
 		if (Strings.isNullOrEmpty(clientId)) {
-			clientId = "thingshub-client-" + ThreadLocalRandom.current().nextInt(10000, 100000);
-			log.info("no client id specified for this thingshub client, and a random client id [{}] is assigned", clientId);
+			clientId = "thingshub-client-" + applicationNodeId;
+			log.info("no client id specified for this thingshub client, the default client id [{}] is assigned to it", clientId);
 		}
 
 		this.topicShareGroup = PREFIX_SHARE_TOPIC + username + "/";
@@ -633,26 +636,48 @@ public class ThingshubClient {
 
 	private void subscribe(String topic, int qos) {
 		try {
-			IMqttToken token = mqttAsyncClient.subscribe(topic, qos);
-			token.waitForCompletion();
+			mqttAsyncClient.subscribe(topic, qos, null, new MqttActionListener() {
 
-			log.info("{}({}) subscribe topic: {}, QoS: {}", username, clientId, topic, qos);
+				@Override
+				public void onSuccess(IMqttToken asyncActionToken) {
+					log.info("{}({}) subscribe topic({},{}) successfully", username, clientId, topic, qos);
+				}
+
+				@Override
+				public void onFailure(IMqttToken asyncActionToken, Throwable e) {
+					log.error("{}({}) subscribe topic({},{}) in failure", username, clientId, topic, qos);
+					log.error("", e);
+				}
+
+			});
 		} catch (MqttException e) {
 			log.error("{}({}) subscribe error, topic: {}, QoS: {}", username, clientId, topic, qos);
 			log.error("", e);
+
 			throw new ThingshubException(e.getMessage());
 		}
 	}
 
 	private void unsubscribe(String topic) {
 		try {
-			IMqttToken token = mqttAsyncClient.unsubscribe(topic);
-			token.waitForCompletion();
+			mqttAsyncClient.unsubscribe(topic, null, new MqttActionListener() {
 
-			log.info("{}({}) unsubscribe: {}", username, clientId, topic);
+				@Override
+				public void onSuccess(IMqttToken asyncActionToken) {
+					log.info("{}({}) unsubscribe topic({}) successfully", username, clientId, topic);
+				}
+
+				@Override
+				public void onFailure(IMqttToken asyncActionToken, Throwable e) {
+					log.error("{}({}) unsubscribe topic({}) in failure", username, clientId, topic);
+					log.error("", e);
+				}
+
+			});
 		} catch (MqttException e) {
 			log.error("{}({}) unsubscribe error: {}", username, clientId, topic);
 			log.error("", e);
+
 			throw new ThingshubException(e.getMessage());
 		}
 	}
